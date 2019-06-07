@@ -1,0 +1,365 @@
+#+TITLE: AcvitiyPub with Reification Done Right
+
+An experiment to use [[https://wiki.blazegraph.com/wiki/index.php/Main_Page][Blazegraph]] as a data backend for an [[https://www.w3.org/TR/activitypub/][ActivityPub]] server.
+
+* Overview
+
+The ActivityPub is a protocol is a decentralized social networking protocol based on [[https://www.w3.org/TR/activitystreams-core/][ActivityStreams]]. ActivityStreams specifies the representation of activities and actors in social networks. Activities and actors are represented as [[https://en.wikipedia.org/wiki/Linked_data][Linked data]], serialized as [[https://www.w3.org/TR/json-ld/][JSON-LD]]. 
+
+Using Linked Data as the foundational data model in an ActivityPub server removes any limitations on the type of data the server can handle and allows interesting queries on data in the social network (as well as data that is linked to from the network).
+
+However not all data in an ActivityPub server is public. Activities might be addressed to individual actors or groups and should not be publicly accessible.
+
+Goal of this experiment is to annotate individual RDF triples with access control information, enforcing the privacy of non-public data and still offering full linked data query abilities to actors (the ability to run SPARQL queries on the data the actor is authorized to access).
+
+Blazegraph is a graph database/RDF triplestore. It has many interesting features, among them [[https://wiki.blazegraph.com/wiki/index.php/Reification_Done_Right][Reification Done Right (RDR)]], a fancy word for adding metadata to triples. We add access control information with RDR.
+
+* Prerequisites
+** Blazegraph
+
+[[https://wiki.blazegraph.com/wiki/index.php/Main_Page][Blazegraph]] is a graph database that supports annotating triples with metadata by reifying triples. That is triples can themselves become subject or object of a triple.
+
+Blazegraph can be obtained from [[https://github.com/blazegraph/database][GitHub]].
+
+To start the database:
+
+#+BEGIN_SRC shell
+java -jar blazegraph.jar
+#+END_SRC
+
+** Emacs
+
+This document is written in Emacs Org-mode and uses [[https://github.com/pashky/restclient.el][restclient]] (and [[https://github.com/alf/ob-restclient.el][ob-restclient]]) for inline requests to the REST API.
+
+* Create RDR namespace
+
+Blazegraph supports multiple namespaces that correspond to dedicated repositories. The default namespace is not in RDR mode.
+
+We create a RDR enabled namespace with name ~rdr~:
+
+#+BEGIN_SRC restclient
+POST http://localhost:9999/blazegraph/namespace
+Content-Type: text/plain
+
+com.bigdata.rdf.sail.namespace=rdr
+com.bigdata.rdf.store.AbstractTripleStore.statementIdentifiers	 = true
+#+END_SRC
+
+#+RESULTS:
+#+BEGIN_SRC text
+CREATED: rdr
+POST http://localhost:9999/blazegraph/namespace
+HTTP/1.1 201 Created
+X-Frame-Options: SAMEORIGIN
+Content-Type: text/plain;charset=iso-8859-1
+Location: http://localhost:9999/blazegraph/namespace/rdr/sparql
+Content-Length: 12
+Server: Jetty(9.4.z-SNAPSHOT)
+Request duration: 0.100033s
+#+END_SRC
+
+*** Delete namespace
+
+While playing around it might be useful to delete the entire namespace (and re-create) it:
+
+#+BEGIN_SRC restclient
+DELETE http://localhost:9999/blazegraph/namespace/rdr
+#+END_SRC
+
+#+RESULTS:
+#+BEGIN_SRC text
+DELETED: rdr
+DELETE http://localhost:9999/blazegraph/namespace/rdr
+HTTP/1.1 200 OK
+X-Frame-Options: SAMEORIGIN
+Content-Type: text/plain;charset=iso-8859-1
+Content-Length: 12
+Server: Jetty(9.4.z-SNAPSHOT)
+Request duration: 0.044713s
+#+END_SRC
+
+* Web Access Control (WAC)
+
+The [[http://solid.github.io/web-access-control-spec/][Web Access Control (WAC)]] specification is a way of describing an access control system.
+
+We create two authorization modes for our users Alice and Bob:
+
+#+BEGIN_SRC restclient
+POST http://localhost:9999/blazegraph/namespace/rdr/sparql
+Content-Type:  application/x-turtle
+
+@prefix acl: <http://www.w3.org/ns/auth/acl#>  .
+@prefix ex: <http://example.com/> .
+
+<http://example.com/alice/authorization/full>
+a             acl:Authorization;
+acl:agent     ex:alice;
+acl:mode      acl:Read, 
+              acl:Write, 
+              acl:Control.
+
+<http://example.com/alice/authorization/read>
+a             acl:Authorization;
+acl:agent     ex:alice;
+acl:mode      acl:Read.
+
+<http://example.com/bob/authorization/full>
+a             acl:Authorization;
+acl:agent     ex:bob;
+acl:mode      acl:Read, 
+              acl:Write, 
+              acl:Control.
+
+<http://example.com/bob/authorization/read>
+a             acl:Authorization;
+acl:agent     ex:bob;
+acl:mode      acl:Read.
+
+#+END_SRC
+
+#+RESULTS:
+#+BEGIN_SRC nxml
+<?xml version="1.0"?>
+<data modified="16" milliseconds="519"/>
+<!-- POST http://localhost:9999/blazegraph/namespace/rdr/sparql -->
+<!-- HTTP/1.1 200 OK -->
+<!-- X-Frame-Options: SAMEORIGIN -->
+<!-- Content-Type: application/xml;charset=iso-8859-1 -->
+<!-- Content-Length: 61 -->
+<!-- Server: Jetty(9.4.z-SNAPSHOT) -->
+<!-- Request duration: 0.524080s -->
+#+END_SRC
+
+
+We can also define a mode of access for public data (by setting ~acl:agentClass~ to ~foaf:Agent~). We could reuse the special [[https://www.w3.org/TR/activitypub/#public-addressing][ActivityPub public collection]] as Authorization.
+
+#+BEGIN_SRC restclient
+POST http://localhost:9999/blazegraph/namespace/rdr/sparql
+Content-Type:  application/x-turtle
+
+@prefix acl: <http://www.w3.org/ns/auth/acl#> .
+@prefix as: <https://www.w3.org/ns/activitystreams#> .
+@prefix foaf: <http://xmlns.com/foaf/0.1/> .
+
+as:Public
+a             acl:Authorization;
+acl:agentClass  foaf:Agent;
+acl:mode      acl:Read.
+#+END_SRC
+
+#+RESULTS:
+#+BEGIN_SRC nxml
+<?xml version="1.0"?>
+<data modified="3" milliseconds="432"/>
+<!-- POST http://localhost:9999/blazegraph/namespace/rdr/sparql -->
+<!-- HTTP/1.1 200 OK -->
+<!-- X-Frame-Options: SAMEORIGIN -->
+<!-- Content-Type: application/xml;charset=iso-8859-1 -->
+<!-- Content-Length: 60 -->
+<!-- Server: Jetty(9.4.z-SNAPSHOT) -->
+<!-- Request duration: 0.437513s -->
+#+END_SRC
+
+* A public note from Alice
+
+If Alice would want to create a note addressed to the public, the ActivityPub ~Create~ activity might look like this:
+
+#+BEGIN_SRC javascript
+{
+"@context": "https://www.w3.org/ns/activitystreams",
+"type": "Create",
+"id": "http://example.com/activity/1",
+"actor": "http://example.com/alice",
+"object": {
+"type": "Note",
+"id": "http://example.com/note/1",
+"content": "This is a note",
+},
+"to": ["https://www.w3.org/ns/activitystreams#Public"]
+}
+#+END_SRC
+
+In turtle:
+
+#+BEGIN_SRC
+@prefix as: <https://www.w3.org/ns/activitystreams#> .
+@prefix ex: <http://example.com/> .
+
+<http://example.com/activity/1> a as:Create .
+<http://example.com/activity/1> as:actor ex:alice .
+<http://example.com/activity/1> as:object <http://example.com/note/1> .
+<http://example.com/activity/1> as:to as:Public.
+
+<http://example.com/note/1> a as:Note .
+<http://example.com/note/1> as:content "This is a note" .
+#+END_SRC
+
+We annotate all these triples indicating that they are readable by the public and Alice has full authorization.
+
+#+BEGIN_SRC restclient
+POST http://localhost:9999/blazegraph/namespace/rdr/sparql
+Content-Type:  application/x-turtle-RDR
+
+@prefix as: <https://www.w3.org/ns/activitystreams#> .
+@prefix acl: <http://www.w3.org/ns/auth/acl#>  .
+@prefix rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
+@prefix ex: <http://example.com/> .
+
+as:Public acl:accessTo <<<http://example.com/activity/1> rdf:type as:Create>> .
+as:Public acl:accessTo <<<http://example.com/activity/1> as:actor ex:alice>> .
+as:Public acl:accessTo <<<http://example.com/activity/1> as:object <http://example.com/note/1>>> .
+as:Public acl:accessTo <<<http://example.com/activity/1> as:to as:Public>> .
+
+as:Public acl:accessTo <<<http://example.com/note/1> rdf:type as:Note>> .
+as:Public acl:accessTo <<<http://example.com/note/1> as:content "This is a note">> .
+
+<http://example.com/alice/authorization/full> 
+acl:accessTo <<<http://example.com/activity/1> rdf:type as:Create>> .
+<http://example.com/alice/authorization/full> 
+acl:accessTo <<<http://example.com/activity/1> as:actor ex:alice>> .
+<http://example.com/alice/authorization/full> 
+acl:accessTo <<<http://example.com/activity/1> as:object <http://example.com/note/1>>> .
+<http://example.com/alice/authorization/full> 
+acl:accessTo <<<http://example.com/activity/1> as:to as:Public>> .
+
+<http://example.com/alice/authorization/full> 
+acl:accessTo <<<http://example.com/note/1> rdf:type as:Note>> .
+<http://example.com/alice/authorization/full> 
+acl:accessTo <<<http://example.com/note/1> as:content "This is a note">> .
+#+END_SRC
+
+#+RESULTS:
+#+BEGIN_SRC nxml
+<?xml version="1.0"?>
+<data modified="24" milliseconds="423"/>
+<!-- POST http://localhost:9999/blazegraph/namespace/rdr/sparql -->
+<!-- HTTP/1.1 200 OK -->
+<!-- X-Frame-Options: SAMEORIGIN -->
+<!-- Content-Type: application/xml;charset=iso-8859-1 -->
+<!-- Content-Length: 61 -->
+<!-- Server: Jetty(9.4.z-SNAPSHOT) -->
+<!-- Request duration: 0.431398s -->
+#+END_SRC
+
+Notes:
+- Using ~a~ does not seem to work in the ~<< >>~ parts of RDR. Using ~rdf:type~ explicitly works.
+- It should be possible to do this much nicer with a SPARQL Update query.
+
+* A private note from Alice to Bob
+
+If Alice wants to send Bob a private note (not addressed to the public), the ~Create~ acvitity might look like this:
+
+#+BEGIN_SRC javascript
+{
+"@context": "https://www.w3.org/ns/activitystreams",
+"type": "Create",
+"id": "http://example.com/activity/2",
+"actor": "http://example.com/alice",
+"object": {
+"type": "Note",
+"id": "http://example.com/note/2",
+"content": "This is a note",
+},
+"to": ["https://example.com/bob"]
+}
+#+END_SRC
+
+We write this down in turtle and annotate with access control information saying that Bob has read access to the note (and activity) whereas Alice has full access:
+
+#+BEGIN_SRC restclient
+POST http://localhost:9999/blazegraph/namespace/rdr/sparql
+Content-Type:  application/x-turtle-RDR
+
+@prefix as: <https://www.w3.org/ns/activitystreams#> .
+@prefix acl: <http://www.w3.org/ns/auth/acl#>  .
+@prefix rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
+@prefix ex: <http://example.com/> .
+
+<http://example.com/bob/authorization/read> 
+acl:accessTo <<<http://example.com/activity/2> rdf:type as:Create>> .
+<http://example.com/bob/authorization/read> 
+acl:accessTo <<<http://example.com/activity/2> as:actor ex:alice>> .
+<http://example.com/bob/authorization/read> 
+acl:accessTo <<<http://example.com/activity/2> as:object <http://example.com/note/2>>> .
+<http://example.com/bob/authorization/read> 
+acl:accessTo <<<http://example.com/activity/2> as:to as:Public>> .
+
+<http://example.com/bob/authorization/read> 
+acl:accessTo <<<http://example.com/note/2> rdf:type as:Note>> .
+<http://example.com/bob/authorization/read> 
+acl:accessTo <<<http://example.com/note/2> as:content "This is a note">> .
+
+<http://example.com/alice/authorization/full> 
+acl:accessTo <<<http://example.com/activity/2> rdf:type as:Create>> .
+<http://example.com/alice/authorization/full> 
+acl:accessTo <<<http://example.com/activity/2> as:actor ex:alice>> .
+<http://example.com/alice/authorization/full> 
+acl:accessTo <<<http://example.com/activity/2> as:object <http://example.com/note/1>>> .
+<http://example.com/alice/authorization/full> 
+acl:accessTo <<<http://example.com/activity/2> as:to as:Public>> .
+
+<http://example.com/alice/authorization/full> 
+acl:accessTo <<<http://example.com/note/2> rdf:type as:Note>> .
+<http://example.com/alice/authorization/full> 
+acl:accessTo <<<http://example.com/note/2> as:content "This is a note">> .
+#+END_SRC
+
+#+RESULTS:
+#+BEGIN_SRC nxml
+<?xml version="1.0"?>
+<data modified="24" milliseconds="428"/>
+<!-- POST http://localhost:9999/blazegraph/namespace/rdr/sparql -->
+<!-- HTTP/1.1 200 OK -->
+<!-- X-Frame-Options: SAMEORIGIN -->
+<!-- Content-Type: application/xml;charset=iso-8859-1 -->
+<!-- Content-Length: 61 -->
+<!-- Server: Jetty(9.4.z-SNAPSHOT) -->
+<!-- Request duration: 0.434328s -->
+#+END_SRC
+
+* Queries
+
+Now that we have some data in the database, let's query.
+
+Easiest to point your browser to <http://localhost:9999/blazegraph/#query> and copy-paste the queries.
+
+*** Public data
+
+#+BEGIN_SRC
+PREFIX acl: <http://www.w3.org/ns/auth/acl#>
+PREFIX as: <https://www.w3.org/ns/activitystreams#>
+
+SELECT ?s ?p ?o WHERE {
+    BIND( <<?s ?p ?o>> AS ?t ) .
+    as:Public acl:accessTo ?t .
+}
+#+END_SRC
+
+*** Data Bob can read
+
+#+BEGIN_SRC
+PREFIX acl: <http://www.w3.org/ns/auth/acl#>
+PREFIX as: <https://www.w3.org/ns/activitystreams#>
+
+SELECT ?s ?p ?o WHERE {
+    BIND( <<?s ?p ?o>> AS ?t ) .
+    <http://example.com/bob/authorization/read> acl:accessTo ?t .
+}
+#+END_SRC
+
+TODO This does not include public data. How would a query look for all data Bob can read including public data?
+
+*** TODO General queries
+
+Say Bob wants to run an arbitary SPARQL query, how can the query be transformed to account for access control?
+
+* See also
+- [[https://pdfs.semanticscholar.org/3297/846f6c8b4878c6f12de6e569b112687387ac.pdf][Evaluation of Metadata Representations in RDF stores]]
+- [[https://github.com/miaEngiadina/ap-ld][An experiment to use Annotated RDF for Access Control]]
+- [[https://www.datatourisme.gouv.fr/][DATAtourisme]]: An open data platform for touristic information that uses Blazegraph.
+- [[https://commonspub.org/][CommonsPub]]: A project to build a generic ActivityPub server
+* About
+
+This experiment is conducted as part of the [[https://miaengiadina.github.io/openengiadina/][openEngiadina]] project.
+
+For questions, feedback and comments, contact pukkamustard (pukkamustard [at] posteo [dot] net).
